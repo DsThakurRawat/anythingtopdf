@@ -1,0 +1,23 @@
+# Ignore images
+*.jpg
+*.jpeg
+*.png
+*.gif
+img/
+whatsapp_extracted/
+
+# Ignore zip files
+*.zip
+
+# Ignore pdfs
+*.pdf
+
+# Ignore virtual environments
+venv/
+env/
+.env
+
+# Other general ignores
+__pycache__/
+node_modules/
+.DS_Store
