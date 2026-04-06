@@ -1,0 +1,3 @@
+aspose-slides
+img2pdf
+PyPDF2
