@@ -1,0 +1,11 @@
+temp_uploads/
+temp_outputs/
+venv/
+env/
+__pycache__/
+*.pdf
+*.zip
+*.jpg
+*.png
+*.pptx
+*.log

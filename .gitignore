@@ -21,3 +21,14 @@ env/
 __pycache__/
 node_modules/
 .DS_Store
+#ignore docs and ppts
+*.pptx
+*.docx
+# Go build artifacts & runtime dirs
+backend/server
+backend/temp_uploads/
+backend/temp_outputs/
+*.log
+
+# Next.js build output
+.next/

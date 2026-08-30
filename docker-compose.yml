@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Optional: bind mount temp folders so we don't lose files when the container restarts
+      - ./backend/temp_uploads:/app/temp_uploads
+      - ./backend/temp_outputs:/app/temp_outputs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # Set backend URL for frontend API calls
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
+    depends_on:
+      - backend

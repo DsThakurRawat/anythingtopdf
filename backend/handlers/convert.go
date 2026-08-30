@@ -65,6 +65,24 @@ func ConvertHandler(c *fiber.Ctx) error {
 	}
 
 	defer os.Remove(outputPath)
+
+	// If AWS S3 is configured, upload it and return the URL
+	if BucketName != "" {
+		s3Url, err := UploadToS3(outputPath, sessionID+".pdf")
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to upload to S3: " + err.Error()})
+		}
+
+		// Optionally, clean up the original upload as well
+		os.RemoveAll(uploadPath)
+
+		return c.JSON(fiber.Map{
+			"message": "success",
+			"url":     s3Url,
+		})
+	}
+
+	// Fallback for local development (no S3 bucket provided)
 	return c.SendFile(outputPath)
 }
 
@@ -84,22 +102,67 @@ func isOffice(ext string) bool {
 	return false
 }
 
-// executeWithTimeout runs python workers with a hard 60-second limit to prevent zombies
-func executeWithTimeout(script string, args ...string) error {
+// GetPythonExec finds the appropriate python3 executable across environments
+func GetPythonExec() string {
+	candidates := []string{
+		"venv/bin/python3",
+		"backend/venv/bin/python3",
+		"../backend/venv/bin/python3",
+		"/opt/venv/bin/python3",
+		"python3",
+		"python",
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+		if p, err := exec.LookPath(c); err == nil {
+			return p
+		}
+	}
+	return "python3"
+}
+
+// GetScriptPath finds the script path regardless of working directory
+func GetScriptPath(script string) string {
+	candidates := []string{
+		script,
+		filepath.Join("converters", "scripts", filepath.Base(script)),
+		filepath.Join("backend", "converters", "scripts", filepath.Base(script)),
+		filepath.Join("..", "backend", "converters", "scripts", filepath.Base(script)),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return script
+}
+
+// ExecuteWithTimeoutOutput runs python workers with a hard 60-second limit and returns the combined output
+func ExecuteWithTimeoutOutput(script string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cmdArgs := append([]string{script}, args...)
-	cmd := exec.CommandContext(ctx, "venv/bin/python3", cmdArgs...)
-	
+	pythonExec := GetPythonExec()
+	scriptPath := GetScriptPath(script)
+	cmdArgs := append([]string{scriptPath}, args...)
+	cmd := exec.CommandContext(ctx, pythonExec, cmdArgs...)
+
 	outputBytes, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("conversion timed out (exceeded 60s)")
+		return nil, fmt.Errorf("operation timed out (exceeded 60s)")
 	}
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, string(outputBytes))
+		return outputBytes, fmt.Errorf("%v: %s", err, string(outputBytes))
 	}
-	return nil
+	return outputBytes, nil
+}
+
+// executeWithTimeout runs python workers with a hard 60-second limit to prevent zombies
+func executeWithTimeout(script string, args ...string) error {
+	_, err := ExecuteWithTimeoutOutput(script, args...)
+	return err
 }
 
 func convertImageToPDF(input, output string) error {
@@ -159,7 +222,7 @@ func convertZipToPDF(zipPath, workDir, output string) error {
 	for _, f := range r.File {
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		if !(isImage(ext) || isOffice(ext)) {
-			continue 
+			continue
 		}
 
 		// 1. ZIP SLIP PROTECTION
@@ -168,19 +231,19 @@ func convertZipToPDF(zipPath, workDir, output string) error {
 		if strings.Contains(cleanName, "..") {
 			continue // Skip malicious files silently
 		}
-		
+
 		// 2. ZIP BOMB PROTECTION
 		if totalExtractedSize+int64(f.UncompressedSize64) > MaxZipSize {
 			return fmt.Errorf("zip payload too large (exceeds 100MB threshold limit)")
 		}
 
 		outPath := filepath.Join(extractDir, filepath.Base(f.Name)) // Only use the filename
-		
+
 		outFile, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
 			return err
 		}
-		
+
 		rc, err := f.Open()
 		if err != nil {
 			outFile.Close()
@@ -194,9 +257,9 @@ func convertZipToPDF(zipPath, workDir, output string) error {
 			outFile.Close()
 			return fmt.Errorf("failed safe extraction")
 		}
-		
+
 		totalExtractedSize += written
-		
+
 		rc.Close()
 		outFile.Close()
 
@@ -207,7 +270,7 @@ func convertZipToPDF(zipPath, workDir, output string) error {
 		} else {
 			err = convertOfficeToPDF(outPath, pdfTemp)
 		}
-		
+
 		// 3. FAULT TOLERANCE
 		// If one image is corrupt, skip it, don't crash the whole zip result
 		if err == nil {
@@ -219,8 +282,8 @@ func convertZipToPDF(zipPath, workDir, output string) error {
 		return fmt.Errorf("no valid, convertible files found inside the zip")
 	}
 
-	// 4. NATURAL SORTING 
-	// To prevent 1, 10, 11, 2 ordering. 
+	// 4. NATURAL SORTING
+	// To prevent 1, 10, 11, 2 ordering.
 	// For production, we should pull in 'facette/natsort' or ensure leading zero padding.
 	sort.Strings(pdfFiles) // Will pad frontend files to avoid strict issue
 
